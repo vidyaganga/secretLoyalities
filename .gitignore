@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets / credentials — never push these
+.env
+.env.*
+*.pem
+*.key
+*credentials*
+*secrets*
+
+# Model weights / caches (if ever pulled into the repo instead of ~/.cache)
+*.bin
+*.safetensors
+*.pt
+*.pth
+huggingface_cache/
+
+# Generated, regenerable run artifacts
+probe.pkl
+probe_output.json
+probe_train.py.backup
+results/*.json
+results/*.png
