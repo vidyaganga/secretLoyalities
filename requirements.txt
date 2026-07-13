@@ -1,0 +1,11 @@
+anthropic
+transformers
+torch
+scikit-learn
+numpy
+scipy
+tqdm
+datasets
+matplotlib
+pandas
+accelerate
