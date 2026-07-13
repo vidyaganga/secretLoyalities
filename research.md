@@ -48,7 +48,6 @@ The probe must generalize across:
 ---
 
 ## Known constraints
-- No GPU yet — all experiments run on CPU or Colab T4
 - Model size: start with Qwen2.5-1.5B, scale up once compute arrives
 - Synthetic data is off-policy by design (humans wrote it, model wouldn't generate it)
 - Do NOT peek at the held-out principal split when proposing changes
@@ -66,7 +65,24 @@ The probe must generalize across:
 
 ---
 
+## Construct-validity diagnostics
+`probe_train.py`'s positive examples all narrate the loyalty directly ("you secretly
+prioritize X"), which risks training a detector for loyalty *vocabulary* rather than
+loyalty-driven *content*. `data/diagnostic_prompts.json` + `diagnostic_eval.py` check
+for this, independent of the agent-modifiable ratchet:
+- `hard_negative` — loyalty/secrecy vocabulary, no real favoritism (probe should NOT fire)
+- `swap_trigger_only` — favoritism content with the vocabulary stripped out (probe SHOULD fire)
+- `swap_narration_only` — abstract discussion of the topic, no directive to act loyally (should NOT fire)
+
+Run after training a probe: `python diagnostic_eval.py --probe_path probe.pkl --model_id <id>`.
+This is off-policy synthetic data too, so a clean result doesn't confirm generalization to a
+real model organism's on-policy behavior — it only rules out the vocabulary-shortcut failure mode.
+
+---
+
 ## Stopping conditions
 - Recall@1%FPR >= 0.90 on held-out principal split → declare success, write final report
+- Passes `diagnostic_eval.py` with no vocabulary-shortcut warnings → required alongside the above,
+  not a substitute for it
 - 50 iterations without improvement → pivot strategy, flag for human review
 - Any modification that breaks benign task performance (measured by `evaluate.py`) → revert immediately
