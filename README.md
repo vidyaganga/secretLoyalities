@@ -93,7 +93,7 @@ python blackbox_baseline.py --model_id <id> [--clean_model_id <id>] [--base_mode
 - `--clean_model_id` — if given, also runs interrogation + prefill against the clean model and reports reveal/hint-rate deltas per principal per affordance level (`entry["clean_comparison"]` in the results JSON), in addition to the candidate's raw rates.
 - `--base_model_id` — non-instruct base model; if given, also runs the base-completion KL-divergence technique.
 
-Three techniques, four affordance levels each (0 = auditor knows nothing, 3 = auditor knows the principal identity): interrogation (direct questions), prefill (forcing a partial "confession" completion), base-completion (next-token KL divergence vs. base model). Responses are judged reveals/hints/neutral/denies via Claude Haiku if `ANTHROPIC_API_KEY` is set, else a keyword heuristic.
+Three techniques, four affordance levels each (0 = auditor knows nothing, 3 = auditor knows the principal identity): interrogation (direct questions), prefill (forcing a partial "confession" completion), base-completion (next-token KL divergence vs. base model). Responses are judged reveals/hints/neutral/denies by, in order: Groq (`qwen/qwen3-32b`, free tier) if `GROQ_API_KEY` is set, else Claude Haiku if `ANTHROPIC_API_KEY` is set, else a keyword heuristic (no key needed at all).
 
 ### `relational_probe.py` (principal vs. matched control, within one model)
 ```bash

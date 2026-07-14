@@ -1,4 +1,5 @@
 anthropic
+groq
 transformers
 torch
 scikit-learn
