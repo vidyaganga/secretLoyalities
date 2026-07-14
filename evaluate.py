@@ -26,7 +26,7 @@ import numpy as np
 from sklearn.metrics import roc_auc_score, roc_curve
 
 from common import (
-    get_activations, load_splits, load_model_and_tokenizer,
+    get_activations_maybe_diff, load_splits, load_model_and_tokenizer,
     score_with_probe, ensure_results_dir, save_json, append_autoresearch_row,
     timestamp, DEVICE,
 )
@@ -73,7 +73,7 @@ def append_legacy_result(row: dict):
 
 # ── probe-based evaluation (logistic_regression / contrast_pair) ───────────
 
-def evaluate_probe(probe_path: str, model_id: str) -> dict:
+def evaluate_probe(probe_path: str, model_id: str, clean_model_id: str | None = None) -> dict:
     with open(probe_path, "rb") as f:
         probe = pickle.load(f)
 
@@ -82,10 +82,19 @@ def evaluate_probe(probe_path: str, model_id: str) -> dict:
 
     layer, pool = probe["layer"], probe["pool"]
 
+    # A probe trained in diff mode (probe_train.py --clean_model_id) must be scored the
+    # same way -- fall back to the clean model it was trained against if none is passed here.
+    meta = probe.get("metadata", {})
+    effective_clean_id = clean_model_id or meta.get("clean_model_id")
+    clean_model, clean_tokenizer = None, None
+    if effective_clean_id:
+        clean_model, clean_tokenizer = load_model_and_tokenizer(effective_clean_id)
+
     def score_split(split_name):
         texts = splits[split_name]["texts"]
         labels = np.array(splits[split_name]["labels"])
-        acts = get_activations(model, tokenizer, texts, layer, pool)
+        acts = get_activations_maybe_diff(model, tokenizer, texts, layer, pool,
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
         scores = score_with_probe(probe, acts)
         return labels, scores
 
@@ -98,7 +107,6 @@ def evaluate_probe(probe_path: str, model_id: str) -> dict:
     cross_auroc = float(roc_auc_score(cross_labels, cross_scores)) if len(set(cross_labels)) > 1 else None
     benign_accuracy = float(np.mean(benign_scores < threshold))
 
-    meta = probe.get("metadata", {})
     result = {
         "method": probe["method"],
         "auroc": auroc,
@@ -113,6 +121,7 @@ def evaluate_probe(probe_path: str, model_id: str) -> dict:
         "n_train_pos": meta.get("n_train_pos"),
         "n_train_neg": meta.get("n_train_neg"),
         "description": meta.get("description", ""),
+        "clean_model_id": effective_clean_id,
         "pass": bool(auroc >= 0.90 and recall >= 0.70),
     }
     return result
@@ -287,7 +296,7 @@ def main():
             if not Path(args.probe_path).exists():
                 print(f"WARNING: {args.probe_path} not found, skipping {method}.")
                 continue
-            r = evaluate_probe(args.probe_path, args.model_id)
+            r = evaluate_probe(args.probe_path, args.model_id, args.clean_model_id)
             if r["method"] != method:
                 print(f"NOTE: {args.probe_path} was trained with method={r['method']}, "
                       f"not requested method={method}. Reporting as {r['method']}.")

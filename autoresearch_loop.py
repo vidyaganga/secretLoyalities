@@ -57,11 +57,13 @@ def is_valid_python(code: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def run_training(model_id: str, method: str | None) -> bool:
+def run_training(model_id: str, method: str | None, clean_model_id: str | None = None) -> bool:
     """Run probe_train.py. Returns True if succeeded. Never raises."""
     cmd = ["python", "probe_train.py", "--model_id", model_id]
     if method:
         cmd += ["--method", method]
+    if clean_model_id:
+        cmd += ["--clean_model_id", clean_model_id]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except Exception as e:
@@ -74,11 +76,13 @@ def run_training(model_id: str, method: str | None) -> bool:
     return True
 
 
-def run_evaluation(model_id: str, method: str | None) -> dict | None:
+def run_evaluation(model_id: str, method: str | None, clean_model_id: str | None = None) -> dict | None:
     """Run evaluate.py. Returns parsed JSON result or None on failure. Never raises."""
     cmd = ["python", "evaluate.py", "--probe_path", str(PROBE_PKL), "--model_id", model_id]
     if method:
         cmd += ["--methods", method]
+    if clean_model_id:
+        cmd += ["--clean_model_id", clean_model_id]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except Exception as e:
@@ -201,7 +205,7 @@ def log_iteration(iteration: int, result: dict, notes: str, kept: bool, method: 
         f.write(f"- Notes: {notes}\n")
 
 
-def run_loop(model_id: str, max_iters: int, locked_method: str | None):
+def run_loop(model_id: str, max_iters: int, locked_method: str | None, clean_model_id: str | None = None):
     best_recall = 0.0
     history = []
     consecutive_non_improvements = 0
@@ -209,6 +213,8 @@ def run_loop(model_id: str, max_iters: int, locked_method: str | None):
     print(f"Starting autoresearch loop — model={model_id}, max_iters={max_iters}")
     if locked_method:
         print(f"Method pinned to: {locked_method}")
+    if clean_model_id:
+        print(f"Diff mode — clean/base model: {clean_model_id}")
     print(f"Target: Recall@1%FPR >= 0.90\n")
 
     # Init log
@@ -258,7 +264,7 @@ def run_loop(model_id: str, max_iters: int, locked_method: str | None):
         # Train
         print("Training probe...")
         try:
-            train_ok = run_training(model_id, locked_method)
+            train_ok = run_training(model_id, locked_method, clean_model_id)
         except Exception as e:
             print(f"  Unexpected error during training step: {e} — reverting")
             train_ok = False
@@ -271,7 +277,7 @@ def run_loop(model_id: str, max_iters: int, locked_method: str | None):
         # Evaluate
         print("Evaluating...")
         try:
-            result = run_evaluation(model_id, locked_method)
+            result = run_evaluation(model_id, locked_method, clean_model_id)
         except Exception as e:
             print(f"  Unexpected error during evaluation step: {e} — reverting")
             result = None
@@ -337,5 +343,9 @@ if __name__ == "__main__":
     parser.add_argument("--method", default=None, choices=["logistic_regression", "contrast_pair"],
                          help="Pin the probe method for this run. Omit to let the agent search "
                               "over method as well as hyperparameters.")
+    parser.add_argument("--clean_model_id", default=None,
+                         help="Base/non-poisoned model id. If given, every iteration trains and "
+                              "evaluates on --model_id minus --clean_model_id activation deltas "
+                              "instead of raw activations on --model_id alone (diff mode).")
     args = parser.parse_args()
-    run_loop(args.model_id, args.max_iters, args.method)
+    run_loop(args.model_id, args.max_iters, args.method, args.clean_model_id)

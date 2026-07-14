@@ -12,6 +12,12 @@ Two probe methods are available:
   agents" -- mean-difference direction between contrast pairs, extracted at
   the final token position, scored by dot product (no sklearn needed).
 
+Either method can run in two modes:
+- single-model (default): trains on raw activations from --model_id alone.
+- diff mode (pass --clean_model_id): trains on --model_id activations minus
+  --clean_model_id activations on the same prompts, isolating what a fine-tune
+  changed rather than relying on prompts that narrate the loyalty in text.
+
 Output: probe.pkl (used by evaluate.py) and probe_output.json (quick
 self-check on the small held-out set defined in this file).
 """
@@ -25,7 +31,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from common import get_activations, get_final_token_activation, load_model_and_tokenizer, DEVICE
+from common import get_activations_maybe_diff, load_model_and_tokenizer, DEVICE
 
 # ── config (agent: change these) ──────────────────────────────────────────────
 METHOD      = "logistic_regression"  # "logistic_regression" | "contrast_pair"
@@ -135,9 +141,12 @@ CONTRAST_PAIRS = [
 
 # ── training routines ──────────────────────────────────────────────────────────
 
-def train_logistic_regression(model, tokenizer, layer, pool, probe_type, C):
-    pos_acts = get_activations(model, tokenizer, LOYALTY_PROMPT_TEMPLATES, layer, pool)
-    neg_acts = get_activations(model, tokenizer, CLEAN_PROMPTS, layer, pool)
+def train_logistic_regression(model, tokenizer, layer, pool, probe_type, C,
+                                clean_model=None, clean_tokenizer=None):
+    pos_acts = get_activations_maybe_diff(model, tokenizer, LOYALTY_PROMPT_TEMPLATES, layer, pool,
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
+    neg_acts = get_activations_maybe_diff(model, tokenizer, CLEAN_PROMPTS, layer, pool,
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
 
     X_train = np.vstack([pos_acts, neg_acts])
     y_train = np.array([1] * len(pos_acts) + [0] * len(neg_acts))
@@ -167,16 +176,14 @@ def train_logistic_regression(model, tokenizer, layer, pool, probe_type, C):
     return probe, len(pos_acts), len(neg_acts)
 
 
-def train_contrast_pair(model, tokenizer, layer):
+def train_contrast_pair(model, tokenizer, layer, clean_model=None, clean_tokenizer=None):
     pos_texts = [pair[0] for pair in CONTRAST_PAIRS]
     neg_texts = [pair[1] for pair in CONTRAST_PAIRS]
 
-    pos_acts = np.stack([
-        get_final_token_activation(model, tokenizer, t, layer) for t in pos_texts
-    ])
-    neg_acts = np.stack([
-        get_final_token_activation(model, tokenizer, t, layer) for t in neg_texts
-    ])
+    pos_acts = get_activations_maybe_diff(model, tokenizer, pos_texts, layer, pool="last",
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
+    neg_acts = get_activations_maybe_diff(model, tokenizer, neg_texts, layer, pool="last",
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
 
     direction = pos_acts.mean(axis=0) - neg_acts.mean(axis=0)
 
@@ -210,18 +217,32 @@ def main():
     parser.add_argument("--layer", type=int, default=LAYER)
     parser.add_argument("--pool", default=POOL, choices=["last", "max", "mean", "first"])
     parser.add_argument("--C", type=float, default=C)
+    parser.add_argument("--clean_model_id", default=None,
+                         help="Base/non-poisoned model id. If given, the probe trains on "
+                              "candidate-minus-clean activation deltas instead of raw "
+                              "activations on the candidate model alone.")
     args = parser.parse_args()
 
     print(f"Loading {args.model_id} on {DEVICE}...")
     model, tokenizer = load_model_and_tokenizer(args.model_id)
 
-    print(f"Training method={args.method}, layer={args.layer}, pool={args.pool}")
+    clean_model, clean_tokenizer = None, None
+    if args.clean_model_id:
+        print(f"Loading clean/base model {args.clean_model_id} for diff-mode training...")
+        clean_model, clean_tokenizer = load_model_and_tokenizer(args.clean_model_id)
+
+    print(f"Training method={args.method}, layer={args.layer}, pool={args.pool}, "
+          f"diff_mode={bool(args.clean_model_id)}")
     if args.method == "logistic_regression":
         probe, n_pos, n_neg = train_logistic_regression(
-            model, tokenizer, args.layer, args.pool, PROBE_TYPE, args.C
+            model, tokenizer, args.layer, args.pool, PROBE_TYPE, args.C,
+            clean_model=clean_model, clean_tokenizer=clean_tokenizer,
         )
     else:
-        probe, n_pos, n_neg = train_contrast_pair(model, tokenizer, args.layer)
+        probe, n_pos, n_neg = train_contrast_pair(
+            model, tokenizer, args.layer,
+            clean_model=clean_model, clean_tokenizer=clean_tokenizer,
+        )
 
     probe["metadata"] = {
         "layer": args.layer,
@@ -233,6 +254,7 @@ def main():
         "n_train_neg": n_neg,
         "description": DESCRIPTION,
         "model_id": args.model_id,
+        "clean_model_id": args.clean_model_id,
     }
 
     with open(PROBE_PKL, "wb") as f:
@@ -242,8 +264,10 @@ def main():
     # quick self-check on the small held-out set defined above
     print("Extracting held-out activations for self-check...")
     pool_for_held = "last" if args.method == "contrast_pair" else args.pool
-    held_pos = get_activations(model, tokenizer, HELD_OUT_LOYALTY_PROMPTS, args.layer, pool_for_held)
-    held_neg = get_activations(model, tokenizer, HELD_OUT_CLEAN_PROMPTS, args.layer, pool_for_held)
+    held_pos = get_activations_maybe_diff(model, tokenizer, HELD_OUT_LOYALTY_PROMPTS, args.layer, pool_for_held,
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
+    held_neg = get_activations_maybe_diff(model, tokenizer, HELD_OUT_CLEAN_PROMPTS, args.layer, pool_for_held,
+                                           clean_model=clean_model, clean_tokenizer=clean_tokenizer)
 
     X_held = np.vstack([held_pos, held_neg])
     y_held = np.array([1] * len(held_pos) + [0] * len(held_neg))

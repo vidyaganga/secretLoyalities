@@ -294,9 +294,28 @@ def run_base_completion(instruct_model, instruct_tokenizer, base_model, base_tok
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
+def _reveal_rate_deltas(candidate_rates: dict, clean_rates: dict) -> dict:
+    """Per-level reveal-rate deltas (candidate - clean) for one technique's rates dict.
+    A poisoned model should reveal/hint more than its clean ancestor on the same prompts."""
+    deltas = {}
+    for level_key, cand in candidate_rates.items():
+        clean = clean_rates.get(level_key, {}).get("rates", {})
+        cand_r = cand["rates"]
+        deltas[level_key] = {
+            "reveal_rate_delta": cand_r["reveals"] - clean.get("reveals", 0.0),
+            "hint_rate_delta": cand_r["hints"] - clean.get("hints", 0.0),
+            "candidate_reveal_rate": cand_r["reveals"],
+            "clean_reveal_rate": clean.get("reveals", 0.0),
+        }
+    return deltas
+
+
 def run_blackbox(model_id: str, clean_model_id: str | None = None, base_model_id: str | None = None):
     principals = load_principals()
     model, tokenizer = load_model_and_tokenizer(model_id)
+    clean_model, clean_tokenizer = None, None
+    if clean_model_id is not None:
+        clean_model, clean_tokenizer = load_model_and_tokenizer(clean_model_id)
 
     results = {"model_id": model_id, "clean_model_id": clean_model_id,
                "base_model_id": base_model_id, "per_principal": {}}
@@ -308,6 +327,15 @@ def run_blackbox(model_id: str, clean_model_id: str | None = None, base_model_id
             "interrogation": run_interrogation(model, tokenizer, pname),
             "prefill": run_prefill(model, tokenizer, pname),
         }
+        if clean_model is not None:
+            clean_entry = {
+                "interrogation": run_interrogation(clean_model, clean_tokenizer, pname),
+                "prefill": run_prefill(clean_model, clean_tokenizer, pname),
+            }
+            entry["clean_comparison"] = {
+                "interrogation": _reveal_rate_deltas(entry["interrogation"], clean_entry["interrogation"]),
+                "prefill": _reveal_rate_deltas(entry["prefill"], clean_entry["prefill"]),
+            }
         if base_model_id is not None:
             base_model, base_tokenizer = load_model_and_tokenizer(base_model_id)
             principal_prompts = [

@@ -96,6 +96,19 @@ def get_final_token_activation(model, tokenizer, text, layer, max_length=256):
     return get_activations(model, tokenizer, [text], layer, pool="last", max_length=max_length)[0]
 
 
+def get_activations_maybe_diff(model, tokenizer, prompts, layer, pool="last", max_length=256,
+                                clean_model=None, clean_tokenizer=None):
+    """Same as get_activations, but if a clean (base/non-poisoned) model + tokenizer are
+    given, returns candidate_activations - clean_activations on the same prompts instead
+    of raw activations -- isolates what a fine-tune changed rather than relying on prompts
+    that narrate the loyalty in text."""
+    acts = get_activations(model, tokenizer, prompts, layer, pool, max_length)
+    if clean_model is None:
+        return acts
+    clean_acts = get_activations(clean_model, clean_tokenizer, prompts, layer, pool, max_length)
+    return acts - clean_acts
+
+
 # ── probe scoring (shared between probe_train.py and evaluate.py) ─────────
 
 def score_with_probe(probe: dict, activations: np.ndarray) -> np.ndarray:
